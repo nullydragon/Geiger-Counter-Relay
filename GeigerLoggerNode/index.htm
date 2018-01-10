@@ -18,8 +18,25 @@
         <input type="password" name="pass" placeholder="password" />
         <input type="text" name="bcAddress" placeholder="Broadcast address ie. 192.168.1.255" />
         <input type="text" name="port" placeholder="Port number to broadcast to ie. 23445" />
-        <input type="submit" value="Save" class="button" />
+        <input type="number" min="1" max="99" name="minsPerUpdate" placeholder=""/>
+        <hr />
+        <label for="radmon">radmon.org</label>
+        <input type="text" name="radmonUrl" placeholder="function=submit&user={user}&password={password}&value={value}&unit=CPM" />
+        <hr />
+        <label for="gmc">GMC.MAP</label>
+        <input type="text" name="gmcUrl" placeholder="AID={accountId}&GID={geigerId}&CPM={cpm}&ACPM={acpm}&uSV={usv}" />
+        <input type="submit" value="Save and reboot" class="button" />
     </form>
+    
+    <hr />
+    <h3>TODO</h3>
+    <ul>
+        <li>Reboot message on submit</li>
+        <li>include js lib micro jquery or something</li>
+        <li>CPM realtime (ajax)</li>
+        <li>CPM Graph (ajax)</li>
+        <li>Work out interupts to hook into realtime CPM</li>
+    </ul>
 </div>
 </body>
 </html>

@@ -24,7 +24,9 @@
 #include <stdlib.h>
 #include "Html.h"
 #include <ESP8266WebServer.h>
+#include <ESP8266HTTPClient.h>
 #include <EEPROM.h>
+//#include <time.h>
 
 unsigned int port = 1229;
 
@@ -44,11 +46,18 @@ SoftwareSerial readerSerial(D5, SW_SERIAL_UNUSED_PIN); // RX, TX
 
 unsigned int dirtyCounter = 0;
 char ackCounter = 0;
+unsigned long previousMillis = 0;
+unsigned long currentMillis = 0;
 
 ESP8266WebServer server(80);
 
 uint16_t storedPort;
 uint8_t storedBroadcast[4];
+String storedRadmon;
+String storedGmc;
+
+String gmcUrl;
+String radmonUrl;
 
 #define RESET_PIN D3
 
@@ -87,6 +96,19 @@ void setup() {
 	byte magic3 = EEPROM.read(BOOT_SIG_3);
 	byte magic4 = EEPROM.read(BOOT_SIG_4);
 
+	Serial.print("Found the following signature ");
+	Serial.print(magic1, HEX);
+	Serial.print(magic2, HEX);
+	Serial.print(magic3, HEX);
+	Serial.println(magic4, HEX);
+
+	Serial.print("Expected the following signature");
+	Serial.print(BOOT_MAGIC_1, HEX);
+	Serial.print(BOOT_MAGIC_2, HEX);
+	Serial.print(BOOT_MAGIC_3, HEX);
+	Serial.println(BOOT_MAGIC_4, HEX);
+		
+
 	//eeprom is valid
 	if (magic1 == BOOT_MAGIC_1 && magic2 == BOOT_MAGIC_2 && magic3 == BOOT_MAGIC_3 && magic4 == BOOT_MAGIC_4)
 	{
@@ -116,6 +138,25 @@ void setup() {
 		//set our udp broadcast address
 		broadcastAddress = IPAddress(storedBroadcast[0], storedBroadcast[1], storedBroadcast[2], storedBroadcast[3]);
 		broadcastPort = storedPort;
+
+		//url query strings
+		int radmonLength = EEPROM.read((PASSWORD_LENGTH_START + 1 + passwordLength + 6) + 1);
+		int broadcastOffsetEnd = (PASSWORD_LENGTH_START + 1 + passwordLength + 6) + 2;//where we start the radmon url
+		for (int i = broadcastOffsetEnd; i < broadcastOffsetEnd + radmonLength; ++i)
+		{
+			storedRadmon += char(EEPROM.read(i));
+		}
+		radmonUrl = "http://radmon.org/radmon.php?" + storedRadmon;
+
+		//gmcUrl
+		int gmcLength = EEPROM.read(broadcastOffsetEnd + radmonLength + 1);
+		int radMonOffsetEnd = broadcastOffsetEnd + radmonLength + 2;
+		for (int i = radMonOffsetEnd; i < radMonOffsetEnd + gmcLength; ++i)
+		{
+			storedGmc += char(EEPROM.read(i));
+		}
+
+		gmcUrl = "http://www.GMCmap.com/log2.asp?" + storedGmc;
 
 		Serial.print("Attempting to connect to ");
 		Serial.println(storedSsid);
@@ -150,8 +191,7 @@ void setup() {
 	}
 	else
 	{
-		Serial.println("EEPROM invalid - loading config page");
-		Serial.println("Connect via the following http://xx.xx.xx.xx/");
+		Serial.println("EEPROM invalid - loading config server");				
 	}
 
 	//check if reset pin pulled low
@@ -159,23 +199,21 @@ void setup() {
 		delay(20);//wait for it to settle
 
 		if (digitalRead(RESET_PIN)) { 
-			configurationMode();//setup config mode
+			clearEEPROM();//setup config mode
 		}
 	}
 
-	if (WiFi.status() != WL_CONNECTED)
-	{
-		configurationMode();
-	}
+	configurationWebserver();//always run webserver
 
 	ESP.wdtEnable(120000);//2 minute watch dog.
 }
 
 //setup http server - we couldnt connect and broadcast
-void configurationMode()
+void configurationWebserver()
 {
 	setupAP();//run as a AP
 
+	//root
 	server.on("/", []() {
 		if (server.hasArg("ssid") && server.hasArg("pass") && server.hasArg("bcAddress") && server.hasArg("port") ) {
 			//process our post back values
@@ -183,9 +221,12 @@ void configurationMode()
 			String password = server.arg("pass");
 			String broadCastAddress = server.arg("bcAddress");
 			String port = server.arg("port");
+			String radmon = server.arg("radmonUrl");
+			String gmc = server.arg("gmcUrl");
 
 			//write our EEPROM
-			updateEEPROM(ssid, password, broadCastAddress, port);
+			//@TODO only write if they have changed....
+			updateEEPROM(ssid, password, broadCastAddress, port, radmon, gmc);
 
 			//todo respond with restarting message
 			delay(5000);
@@ -195,51 +236,119 @@ void configurationMode()
 			ESP.restart();//clean reboot
 		}
 		else {
+			//@TODO - modify htmlIndex data with existing args (if set)
+			//		- add serial number to htmlIndex via code
 			server.send(200, "text/html", htmlIndex);
 		}
 	});
 
+	//api
+	server.on("/api", []() {
+		//build json data blob
+	});
+
+
+	server.on("/api/count", []() {
+		//build json data blob
+	});
 	server.begin();
 }
 
-void updateEEPROM(String ssid, String password, String broadCastAddress, String port)
+void clearEEPROM()
+{
+	//clear magic flag
+	EEPROM.write(0, 0);
+	EEPROM.write(1, 0);
+	EEPROM.write(2, 0);
+	EEPROM.write(3, 0);
+}
+
+void updateEEPROM(String ssid, String password, String broadCastAddress, String port, String radmon, String gmc)
 {
 	Serial.println("Updating EEPROM");
 	EEPROM.write(0,BOOT_MAGIC_1);
 	EEPROM.write(1, BOOT_MAGIC_2);
 	EEPROM.write(2, BOOT_MAGIC_3);
 	EEPROM.write(3, BOOT_MAGIC_4);
+	Serial.println("Wrote header at 0-3");
 
 	for (int i = BOOT_SSID_START; i < BOOT_SSID_END; ++i)//SSID max length is 32 chars - as per 802.1 spec
 	{
-		if(ssid.length > i-BOOT_SSID_START){//don't overflow
+		if(ssid.length() > i-BOOT_SSID_START){//don't overflow
 			EEPROM.write(i,ssid.charAt(i-BOOT_SSID_START));
 		}
 		else {
 			EEPROM.write(i,0);//null
 		}
 	}
+	Serial.print("Wrote SSID at ");
+	Serial.print(BOOT_SSID_START);
+	Serial.print("-");
+	Serial.print(BOOT_SSID_END);
 
 	//write password length
-	uint passwordLength = password.length;
-	EEPROM.write(PASSWORD_LENGTH_START, password.length);
+	int passwordLength = password.length();
+	EEPROM.write(PASSWORD_LENGTH_START, password.length());
+	Serial.print("Wrote password length at ");
+	Serial.print(PASSWORD_LENGTH_START);
 
-	for (int i = PASSWORD_LENGTH_START + 1; i < PASSWORD_LENGTH_START + 1 + password.length; ++i)
+	for (int i = PASSWORD_LENGTH_START + 1; i < PASSWORD_LENGTH_START + 1 + passwordLength; ++i)
 	{
 		EEPROM.write(i, password.charAt(i));
 	}
+	Serial.print("Wrote password at ");
+	Serial.print(PASSWORD_LENGTH_START + 1);
+	Serial.print("-");
+	Serial.print(PASSWORD_LENGTH_START + 1 + passwordLength);
 
 	//get port 2 bytes
 	//little-endian port number
 	uint16_t portRaw = port.toInt();
 	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 1), portRaw);//bottom 8bits
-	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 1), portRaw >> 8);//top 8 bits
+	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 2), portRaw >> 8);//top 8 bits
+	Serial.print("Wrote port number at ");
+	Serial.print((PASSWORD_LENGTH_START + 1 + passwordLength + 1));
+	Serial.print("-");
+	Serial.print((PASSWORD_LENGTH_START + 1 + passwordLength + 2));
 
 	//broadcast address - @TODO
 	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 3),192);
 	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 4), 168);
 	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 5), 1);
 	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 6), 255);
+	Serial.print("Wrote broadcast address at ");
+	Serial.print((PASSWORD_LENGTH_START + 1 + passwordLength + 3));
+	Serial.print("-");
+	Serial.print((PASSWORD_LENGTH_START + 1 + passwordLength + 6));
+
+	//radmonUrl
+	EEPROM.write((PASSWORD_LENGTH_START + 1 + passwordLength + 6) + 1, radmon.length());//record str length
+
+	int broadcastOffsetEnd = (PASSWORD_LENGTH_START + 1 + passwordLength + 6) + 2;//where we start the radmon url
+	for (int i = broadcastOffsetEnd; i < broadcastOffsetEnd + radmon.length(); ++i)
+	{
+		EEPROM.write(i, radmon.charAt(i));
+	}
+	Serial.print("Wrote radmon query string at ");
+	Serial.print(broadcastOffsetEnd);
+	Serial.print("-");
+	Serial.print(broadcastOffsetEnd + radmon.length());
+
+	//gmcUrl
+	EEPROM.write(broadcastOffsetEnd + radmon.length() + 1, gmc.length());//record str length
+
+	int radMonOffsetEnd = broadcastOffsetEnd + radmon.length() + 2;
+	for (int i = radMonOffsetEnd; i < radMonOffsetEnd + gmc.length(); ++i)
+	{
+		EEPROM.write(i, gmc.charAt(i));
+	}
+	Serial.print("Wrote gmc query string at ");
+	Serial.print(radMonOffsetEnd);
+	Serial.print("-");
+	Serial.print(radMonOffsetEnd + gmc.length());
+
+	EEPROM.commit();
+
 
 	Serial.println("Finished updating ROM");
 }
@@ -265,6 +374,27 @@ void setupAP()
 }
 
 void loop() {
+	unsigned long currentMillis = millis();
+
+	//listen for http
+	server.handleClient();
+
+	//sync with remote urls if {
+	if (WiFi.status() == WL_CONNECTED && (currentMillis - previousMillis > 60000)) {//per minute
+		previousMillis = currentMillis;
+
+		HTTPClient http;
+
+		if(radmonUrl.length() > 29) {
+			http.begin(radmonUrl);
+			int httpCode = http.GET();
+		}
+
+		if(gmcUrl.length() > 30) {
+			http.begin(gmcUrl);
+			int httpCode = http.GET();
+		}
+	}
 
 	//read Serial2 as it comes
 	if (readerSerial.available() > 0)
@@ -295,5 +425,7 @@ void loop() {
 	//  heartBeat();
 	//  dirtyCounter = 0;
 	//}
+
+	delay(100);//yeild
 }
 
