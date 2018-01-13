@@ -30,9 +30,6 @@
     <ClInclude Include="__vm\.GeigerLoggerNode.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ESP8266HTTPClient.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="SoftwareSerial.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -41,9 +38,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="ESP8266HTTPClient.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="SoftwareSerial.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
